@@ -43,6 +43,7 @@ import threading
 import io
 import shlex
 import logging
+import selectors
 
 import six
 
@@ -1079,13 +1080,32 @@ def interruptable_popen(*args, **kwargs):
 
     All other *args* and *kwargs* are forwarded to the :py:class:`Popen` constructor.
     """
+    def check_io():
+        done = False
+        while not done:
+            for key, _ in sel.select():
+                data = key.fileobj.read1().decode()
+                if not data:
+                    done = True
+                    break
+                if key.fileobj is p.stdout:
+                    rich_console.log(data.strip("\n"))
+                else:
+                    rich_console.log(data.strip("\n"))
     # get kwargs not being passed to Popen
     interrupt_callback = kwargs.pop("interrupt_callback", None)
     kill_timeout = kwargs.pop("kill_timeout", None)
-
+    rich_console = kwargs.pop("rich_console", None)
     # start the subprocess in a new process group
-    kwargs["preexec_fn"] = os.setsid
+    # kwargs["preexec_fn"] = os.setsid
     p = subprocess.Popen(*args, **kwargs)
+    # so we can log the process with the rich console
+    if rich_console:
+        sel = selectors.DefaultSelector()
+        sel.register(p.stdout, selectors.EVENT_READ)
+        sel.register(p.stderr, selectors.EVENT_READ)
+        while p.poll() is None:
+            check_io()
 
     # handle interrupts
     try:
